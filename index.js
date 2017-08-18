@@ -1,9 +1,8 @@
 const fetch = require('node-fetch');
 const api = require('chuck-norris-api');
-const config = require('config');
 
-const cloudApiId = config.DOCKER_CLOUD_API_ID;
-const cloudApiSecret = config.DOCKER_CLOUD_API_SECRET;
+const cloudApiId = process.env.DOCKER_CLOUD_API_ID;
+const cloudApiSecret = process.env.DOCKER_CLOUD_API_SECRET;
 const apiUrl = `https://${cloudApiId}:${cloudApiSecret}@cloud.docker.com`;
 const headers = {
   Accept: 'application/json',
