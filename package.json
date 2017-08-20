@@ -2,7 +2,9 @@
   "name": "docker-cloud-bot",
   "version": "1.0.0",
   "description": "A bot to manage your Docker cloud stacks (create, update, delete) based on PR lifecycle",
-  "maintainers": ["MC Support <mc@commercetools.com>"],
+  "maintainers": [
+    "MC Support <mc@commercetools.com>"
+  ],
   "license": "ISC",
   "repository": "https://github.com/commercetools/docker-cloud-bot.git",
   "scripts": {
@@ -21,7 +23,7 @@
     "xo": "^0.18.0"
   },
   "engines": {
-    "node": ">= 7.7.0",
-    "npm": ">= 4.0.0"
+    "node": ">= 8.0.0",
+    "npm": ">= 5.0.0"
   }
 }
