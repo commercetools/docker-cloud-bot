@@ -1,0 +1,42 @@
+# Determines how a stack deployment is triggered.
+trigger:
+  # This is for matching the status of the incoming change events
+  status: success
+  # You can provide here a list of keys of your CI systems, specifically the keys
+  # of the job/pipeline that needs to trigger the deployment.
+  issuers:
+    - continuous-integration/travis-ci/pr
+    - wercker/push-release
+    - ci/circleci
+
+# Configure if the bot should notify (with comments) about created/redeployed/terminated stack
+notify:
+  onCreate: true
+  onUpdate: true
+  onDelete: true
+
+# Restrict the execution of the deployment to specific branches (regex or exact match).
+# If you omit this, the execution will be triggered for all branches.
+branches:
+  only:
+    - /feature-/
+    - /experiment-/
+    - staging
+
+# Configuration of the docker cloud stack
+stack:
+  # Those values are required
+  imageRepo: sphereio/merchant-center-frontend
+  innerPort: 3001
+  outerPortRangeMin: 3000
+  # The template contains keys as specified in the docker cloud API.
+  # All values specified here will be passed as-is to the API request.
+  template:
+    name: my-service
+    target_num_containers: 1
+    container_envvars:
+      - key: NODE_ENV
+        value: production
+    tags:
+      - production
+    autorestart: ALWAYS
