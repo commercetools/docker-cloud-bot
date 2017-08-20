@@ -1,92 +1,275 @@
-const fetch = require('node-fetch');
-const api = require('chuck-norris-api');
+const dockerCloudConfigFile = 'docker-cloud-config.yml';
 
-const cloudApiId = process.env.DOCKER_CLOUD_API_ID;
-const cloudApiSecret = process.env.DOCKER_CLOUD_API_SECRET;
-const apiUrl = `https://${cloudApiId}:${cloudApiSecret}@cloud.docker.com`;
-const headers = {
-  Accept: 'application/json',
-  'Content-Type': 'application/json',
-};
-const DOCKER_CLOUD_BOT_LOGIN = 'docker-cloud-bot[bot]';
+const isValidRegex = value =>
+  typeof value === 'string' &&
+  value.charAt(0) === '/' &&
+  value.charAt(value.length - 1) === '/';
+const convertStringToRegex = value =>
+  new RegExp(value.substring(1, value.length - 1));
 
-function getStackUrlByName(name) {
-  return `${apiUrl}/api/app/v1/stack?name=${name}`;
-}
+/* Selectors */
 
-function getCommonOptions() {
-  return { headers: headers };
-}
+// Always pick the first branch in the list.
+// NOTE: not sure if it's necessary to handle multiple branches.
+const selectBranchName = context => context.payload.branches[0].name;
+const selectIsWhitelistBranch = (branchName, branchesWhitelist) =>
+  branchesWhitelist.length > 0
+    ? branchesWhitelist.some(branch => {
+        if (isValidRegex(branch))
+          return convertStringToRegex(branch).test(branchName);
+        return branch === branchName;
+      })
+    : true;
+const selectIssuerKey = context => context.payload.context;
+const selectIsWhitelistIssuer = (issuerKey, issuersWhitelist) =>
+  issuersWhitelist.some(issuer => issuer === issuerKey);
+const selectChangeState = context => context.payload.state;
 
-function processResponse(response) {
-  let isOk = response.ok;
+/* Config helpers */
 
-  return response.text().then(text => {
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch (error) {
-      isOk = false;
+const selectTriggerStatus = config => config.trigger.status;
+const selectTriggerIssuers = config => config.trigger.issuers;
+const selectFilterBranches = config =>
+  config.branches ? config.branches.only : [];
+const selectNotifyOnCreate = config => config.notify.onCreate;
+const selectNotifyOnUpdate = config => config.notify.onUpdate;
+const selectNotifyOnDelete = config => config.notify.onDelete;
+const selectStack = config => config.stack;
+
+const formatErrorMessage = error =>
+  error instanceof Error
+    ? `\`\`\`\n${error.stack || error.message}\n\`\`\``
+    : `\`\`\`json\n${JSON.stringify(error, null, 2)}\n\`\`\``;
+
+module.exports = robot => {
+  const stackApi = require('./stack')(robot);
+
+  // From the "status change" event unfortunately we don't get the PR number,
+  // which is necessary for posting comments on the PR.
+  // Therefore we need to search for the PR number based on e.g. branch name and
+  // git commit SHA.
+  const getPullRequestNumber = async (meta, context) => {
+    const searchQuery = meta.gitSha
+      ? `head:${meta.branchName} is:pr ${meta.gitSha}`
+      : `head:${meta.branchName} is:pr`;
+    const result = await context.github.search.issues({ q: searchQuery });
+    if (result.data.items.length === 0) {
+      robot.log.warn(
+        `[${context.event}] Could not find any Pull Request matching the following search criteria: "${searchQuery}"`
+      );
+      return;
+    }
+    return result.data.items[0].number;
+  };
+  const addComment = async (meta, context) => {
+    const gitSha = context.payload.sha;
+    let prNumber = meta.prNumber;
+    if (!prNumber) {
+      prNumber = await getPullRequestNumber(
+        {
+          branchName: meta.branchName,
+          gitSha,
+        },
+        context
+      );
     }
 
-    if (isOk) return parsed;
-
-    throw parsed || text;
-  });
-}
-
-function getDockerServiceByBranch(branchName) {
-  return fetch(getStackUrlByName(branchName), getCommonOptions())
-  .then(processResponse)
-  .then(result => {
-    if (!result.objects.length) {
-      // TODO create a comment informing the deploy is not ready yet
-      console.log('There is no stack with the provided name.');
-      return null;
+    // If there is a PR number, post the comment to the PR.
+    if (prNumber) {
+      const params = context.issue({ body: meta.message, number: prNumber });
+      return context.github.issues.createComment(params);
     }
-    return result.objects[0];
-  })
-  .catch(e => console.log(e));
-}
 
-function createDockerCloudBotComment(branchName, context) {
-  getDockerServiceByBranch(branchName).then(result => {
-    if (result && result.services.length > 0)
-      fetch(apiUrl + result.services[0], getCommonOptions())
-      .then(processResponse)
-      .then(service => {
-        api.getRandom({}).then(function (data) {
-          if (service['container_ports'].length > 0) {
-            const url = service['container_ports'][0]['endpoint_uri'].replace('tcp', 'http');
-            const params = context.issue({
-              body: `${data.value.joke}\n${url}`
-            });
-            return context.github.issues.createComment(params);
-          }
-        });
-      });
-  })
-  .catch(err => console.log(err));
-}
+    if (!gitSha) {
+      robot.log.error(
+        `[${context.event}] Cannot comment to commit because git SHA is not defined "${gitSha}"`
+      );
+      return Promise.resolve();
+    }
+    robot.log(
+      `[${context.event}] Add a comment directly to the commit "${gitSha}"`
+    );
+    // If no PR is found (e.g. has not been created yet), post the comment
+    // directly to the commit.
+    const params = context.issue({
+      body: meta.message,
+      sha: gitSha,
+    });
+    return context.github.repos.createCommitComment(params);
+  };
 
-module.exports = (robot) => {
-  robot.on('pull_request', async context => {
-    // TODO when receiving events like close or merge, we can remove the stack
-    const branchName = context.payload.pull_request.head.ref;
-    // Check if there is already a comment from the bot, if not create a new one
-    if (context.payload.action === 'synchronize') {
-      context.github.issues.getComments({
-        owner: context.payload.pull_request.user.login,
-        repo: context.payload.repository.name ,
-        number: context.payload.number
-      }).then(comments => {
-        const botMessage = comments.data.find(comment => comment.user.login === DOCKER_CLOUD_BOT_LOGIN);
-        if (!botMessage) {
-          createDockerCloudBotComment(branchName, context);
+  // Listen for `status` change events.
+  // This is used for triggering a stack deployment, which should be executed
+  // only after the CI system finished running the build jobs.
+  robot.on('status', async context => {
+    // Skip if the issuer of the event is the bot itself.
+    if (context.isBot) {
+      robot.log(`[${context.event}] The issuer is the bot, skip`);
+      return;
+    }
+
+    // Load the bot configuration from the remote repository (`.github/docker-cloud-config.yml`)
+    // TODO: validate the config.
+    const config = await context.config(dockerCloudConfigFile);
+    robot.log(`[${context.event}] Docker cloud config`, JSON.stringify(config));
+
+    const branchName = selectBranchName(context);
+    // The CI system that triggered this event, e.g. `continuous-integration/travis-ci/pr`
+    const issuer = selectIssuerKey(context);
+    // Get the state of the status change.
+    const state = selectChangeState(context);
+    const expectedState = selectTriggerStatus(config);
+
+    // Determine if this event will trigger a stack deployment:
+    // - branch has to match the filters configuration or being whitelisted
+    // - issuer has to match on of the given keys (different for travis, circleci, ...)
+    // - state has to match the given configuration (e.g. success)
+    const isWhitelistBranch = selectIsWhitelistBranch(
+      branchName,
+      selectFilterBranches(config)
+    );
+    robot.log(
+      `[${context.event}] isWhitelistBranch (${branchName})`,
+      isWhitelistBranch
+    );
+    const isWhitelistIssuer = selectIsWhitelistIssuer(
+      issuer,
+      selectTriggerIssuers(config)
+    );
+    robot.log(
+      `[${context.event}] isWhitelistIssuer (${issuer})`,
+      isWhitelistIssuer
+    );
+    const isExpectedState = state === expectedState;
+    robot.log(`[${context.event}] isExpectedState (${state})`, isExpectedState);
+
+    if (isWhitelistBranch && isWhitelistIssuer && isExpectedState) {
+      try {
+        // Get the existing docker cloud stack, matching the branch name.
+        const existingStack = await stackApi.getStackByName(branchName);
+        // If the stack exists, try to redeploy it.
+        if (existingStack) {
+          const stack = await stackApi.redeployStack(existingStack);
+          robot.log(
+            `[${context.event}] Stack "${branchName}" has been redeployed`
+          );
+          if (selectNotifyOnUpdate(config))
+            return addComment(
+              {
+                message: `:rocket: Stack \`${branchName}\` has been redeployed!`,
+                branchName,
+              },
+              context
+            );
+          robot.log(`[${context.event}] Skip notification on stack update`);
+          return;
         }
-      });
+        // If the stack does not exist yet, try to create a new one.
+        const createdStack = await stackApi.createStack(branchName, {
+          filterBranches: selectFilterBranches(config),
+          stack: selectStack(config),
+        });
+        robot.log(
+          `[${context.event}] Stack \`${branchName}\` has been created`,
+          branchName
+        );
+
+        if (selectNotifyOnCreate(config)) {
+          const deployedServices = await stackApi.getStackServiceUrls(
+            createdStack
+          );
+          return addComment(
+            {
+              message: `:tada: Your new stack \`${branchName}\` has been created!\n\n${stackApi.getStackUrlForWebApp(
+                createdStack
+              )}\n\n${Object.keys(deployedServices).map(
+                name =>
+                  `* ${name}${deployedServices[name].map(
+                    url => `\n  * ${url}`
+                  )}`
+              )}`,
+              branchName,
+            },
+            context
+          );
+        }
+        robot.log(`[${context.event}] Skip notification on stack create`);
+        return;
+      } catch (error) {
+        robot.log.error(
+          `[${context.event}] Error while deploying stack "${branchName}"`,
+          error.stack || error
+        );
+        const formattedError = formatErrorMessage(error);
+        return addComment(
+          {
+            message: `:stop_sign: Something went wrong while deploying the stack \`${branchName}\`. Have a look at the error message below.\n\n${formattedError}`,
+            branchName,
+          },
+          context
+        );
+      }
+    } else {
+      robot.log(
+        `[${context.event}] This event does not match the rules for deploying the stack "${branchName}", will be skipped`
+      );
     }
-    if (context.payload.action === 'opened')
-      createDockerCloudBotComment(branchName, context);
+  });
+
+  robot.on('pull_request.closed', async context => {
+    // Skip if the issuer of the event is the bot itself.
+    if (context.isBot) {
+      robot.log(`[${context.event}] The issuer of the event is the bot, skip`);
+      return;
+    }
+    const branchName = context.payload.pull_request.head.ref;
+
+    try {
+      // Get the existing docker cloud stack, matching the branch name.
+      const existingStack = await stackApi.getStackByName(branchName);
+      // If the stack exists, try to redeploy it.
+      if (existingStack && existingStack.state.toLowerCase() !== 'terminated') {
+        await stackApi.terminateStack(existingStack);
+        robot.log(
+          `[${context.event}] Stack "${branchName}" has been scheduled for termination`
+        );
+
+        // Load the bot configuration from the remote repository (`.github/docker-cloud-config.yml`)
+        // TODO: validate the config.
+        const config = await context.config(dockerCloudConfigFile);
+        robot.log(
+          `[${context.event}] Docker cloud config`,
+          JSON.stringify(config)
+        );
+
+        if (selectNotifyOnDelete(config))
+          return addComment(
+            {
+              message: `:skull: Stack \`${branchName}\` has been scheduled for termination!`,
+              branchName: branchName,
+            },
+            context
+          );
+        robot.log(`[${context.event}] Skip notification on stack delete`);
+        return;
+      } else {
+        robot.log(
+          `[${context.event}] The stack "${branchName}" does not exist or has already been terminated.`
+        );
+      }
+    } catch (error) {
+      robot.log.error(
+        `[${context.event}] Error while terminating stack "${branchName}"`,
+        error.stack || error
+      );
+      const formattedError = formatErrorMessage(error);
+      return addComment(
+        {
+          message: `:stop_sign: Something went wrong while terminating the stack \`${branchName}\`. Have a look at the error message below.\n\n${formattedError}`,
+          branchName: branchName,
+        },
+        context
+      );
+    }
   });
 };

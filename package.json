@@ -1,8 +1,8 @@
 {
   "name": "docker-cloud-bot",
   "version": "1.0.0",
-  "description": "docker cloud bot to add deploy links as comments in the PR's",
-  "author": "Daniel Martínez <damarna85@gmail.com>",
+  "description": "A bot to manage your Docker cloud stacks (create, update, delete) based on PR lifecycle",
+  "maintainers": ["MC Support <mc@commercetools.com>"],
   "license": "ISC",
   "repository": "https://github.com/commercetools/docker-cloud-bot.git",
   "scripts": {
@@ -10,9 +10,8 @@
     "test": "mocha && xo --extend probot"
   },
   "dependencies": {
-    "chuck-norris-api": "^1.0.9",
     "node-fetch": "^1.7.2",
-    "probot": "^0.7.2"
+    "probot": "^0.9.1"
   },
   "devDependencies": {
     "eslint-config-probot": ">=0.1.0",
