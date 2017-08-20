@@ -3,6 +3,8 @@
 
 A bot to manage your _Docker cloud stacks_ (create, update, delete) based on PR lifecycle.
 
+![Image of Yaktocat](docker-cloud-bot-screenshot.png)
+
 ## Setup
 
 ```
