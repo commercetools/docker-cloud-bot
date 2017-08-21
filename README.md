@@ -1,5 +1,5 @@
 # docker-cloud-bot
-> a GitHub App built with [probot](https://github.com/probot/probot) that
+> a GitHub App built with [probot](https://github.com/probot/probot)
 
 A bot to manage your _Docker cloud stacks_ (create, update, delete) based on PR lifecycle.
 
@@ -39,6 +39,7 @@ There are currently some limitations in terms of configuration and other possibl
 * you can define only one _docker cloud service_ in your stack template.
 * the stack template configuration must be provided in the `.github/docker-cloud-config.yml` in plain text. For instance if you need e.g. environment variables with sensible credentials, you can't really do much besides providing them as plain text.
 * bot comments are not customisable.
+* it's assumed that the docker image tag is the same as the github branch.
 
 ## Deployment
 See [docs/deploy.md](docs/deploy.md) if you would like to run your own instance of this plugin.
