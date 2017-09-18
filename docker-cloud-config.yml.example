@@ -22,6 +22,9 @@ branches:
     - /feature-/
     - /experiment-/
     - staging
+  # The `only` option will take precedence over `ignore`
+  ignore:
+    - master
 
 # Configuration of the docker cloud stack
 stack:

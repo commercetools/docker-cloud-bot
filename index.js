@@ -12,14 +12,34 @@ const convertStringToRegex = value =>
 // Always pick the first branch in the list.
 // NOTE: not sure if it's necessary to handle multiple branches.
 const selectBranchName = context => context.payload.branches[0].name;
-const selectIsWhitelistBranch = (branchName, branchesWhitelist) =>
-  branchesWhitelist.length > 0
-    ? branchesWhitelist.some(branch => {
-        if (isValidRegex(branch))
-          return convertStringToRegex(branch).test(branchName);
-        return branch === branchName;
-      })
-    : true;
+const selectIsWhitelistBranch = (branchName, config) => {
+  if (!config.branches) return true;
+
+  // Check first if there are whitelisted branches
+  if (config.branches.only) {
+    const branchesWhitelist = config.branches.only;
+    const isBranchWhitelisted = branchesWhitelist.some(branch => {
+      if (isValidRegex(branch))
+        return convertStringToRegex(branch).test(branchName);
+      return branch === branchName;
+    });
+    return isBranchWhitelisted;
+  }
+
+  // Check if there is a list of branches to be ignored
+  if (config.branches.ignore) {
+    const branchesBlacklist = config.branches.ignore;
+    const isBranchBlacklisted = branchesBlacklist.some(branch => {
+      if (isValidRegex(branch))
+        return convertStringToRegex(branch).test(branchName);
+      return branch === branchName;
+    });
+    return !isBranchBlacklisted;
+  }
+
+  // Unknown branch option, simply ignore
+  return true;
+};
 const selectIssuerKey = context => context.payload.context;
 const selectIsWhitelistIssuer = (issuerKey, issuersWhitelist) =>
   issuersWhitelist.some(issuer => issuer === issuerKey);
@@ -29,8 +49,6 @@ const selectChangeState = context => context.payload.state;
 
 const selectTriggerStatus = config => config.trigger.status;
 const selectTriggerIssuers = config => config.trigger.issuers;
-const selectFilterBranches = config =>
-  config.branches ? config.branches.only : [];
 const selectNotifyOnCreate = config => config.notify.onCreate;
 const selectNotifyOnUpdate = config => config.notify.onUpdate;
 const selectNotifyOnDelete = config => config.notify.onDelete;
@@ -121,13 +139,10 @@ module.exports = robot => {
     const expectedState = selectTriggerStatus(config);
 
     // Determine if this event will trigger a stack deployment:
-    // - branch has to match the filters configuration or being whitelisted
+    // - branch has to match the filters configuration or being whitelisted/blacklisted
     // - issuer has to match on of the given keys (different for travis, circleci, ...)
     // - state has to match the given configuration (e.g. success)
-    const isWhitelistBranch = selectIsWhitelistBranch(
-      branchName,
-      selectFilterBranches(config)
-    );
+    const isWhitelistBranch = selectIsWhitelistBranch(branchName, config);
     robot.log(
       `[${context.event}] isWhitelistBranch (${branchName})`,
       isWhitelistBranch
@@ -166,7 +181,6 @@ module.exports = robot => {
         }
         // If the stack does not exist yet, try to create a new one.
         const createdStack = await stackApi.createStack(branchName, {
-          filterBranches: selectFilterBranches(config),
           stack: selectStack(config),
         });
         robot.log(
